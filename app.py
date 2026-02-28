@@ -9,6 +9,8 @@ from src.file_parser import parse_file
 from src.vector_store import get_vector_store, add_documents_to_store, get_collection_stats, clear_store
 # Updated import here
 from src.rag_chain import stream_rag_answer
+from streamlit_pdf_viewer import pdf_viewer
+from src.pdf_utils import get_pdf_annotations
 
 # --- Page Config ---
 st.set_page_config(
@@ -195,7 +197,27 @@ for msg in st.session_state.chat_history:
             with st.expander("🔍 View Source Documents"):
                 for s in msg["sources"]:
                     st.markdown(f"**📄 {s['source']} (Page {s['page']})**")
-                    st.info(s.get("text", "Text unavailable."))
+                    if s["source"].lower().endswith(".pdf"):
+                        pdf_path = os.path.join(UPLOAD_DIR, s["source"])
+                        st.write(f"DEBUG Historical: source={s['source']}, path={pdf_path}, exists={os.path.exists(pdf_path)}")
+                        if os.path.exists(pdf_path):
+                            # Ensure page is an int
+                            page_num = int(s["page"])
+                            try:
+                                annotations = get_pdf_annotations(pdf_path, page_num, s.get("text", ""))
+                                pdf_viewer(
+                                    input=pdf_path,
+                                    width=700,
+                                    annotations=annotations,
+                                    pages_to_render=[page_num]
+                                )
+                            except Exception as e:
+                                st.error(f"Error viewing PDF: {e}")
+                                st.info(s.get("text", "Text unavailable."))
+                        else:
+                            st.info(s.get("text", "Text unavailable."))
+                    else:
+                        st.info(s.get("text", "Text unavailable."))
 
 # Chat input
 if prompt := st.chat_input("Ask a question about your course notes..."):
@@ -230,7 +252,26 @@ if prompt := st.chat_input("Ask a question about your course notes..."):
                 with st.expander("🔍 View Source Documents"):
                     for s in sources:
                         st.markdown(f"**📄 {s['source']} (Page {s['page']})**")
-                        st.info(s.get("text", "Text unavailable."))
+                        if s["source"].lower().endswith(".pdf"):
+                            pdf_path = os.path.join(UPLOAD_DIR, s["source"])
+                            st.write(f"DEBUG Active: source={s['source']}, path={pdf_path}, exists={os.path.exists(pdf_path)}")
+                            if os.path.exists(pdf_path):
+                                page_num = int(s["page"])
+                                try:
+                                    annotations = get_pdf_annotations(pdf_path, page_num, s.get("text", ""))
+                                    pdf_viewer(
+                                        input=pdf_path,
+                                        width=700,
+                                        annotations=annotations,
+                                        pages_to_render=[page_num]
+                                    )
+                                except Exception as e:
+                                    st.error(f"Error viewing PDF: {e}")
+                                    st.info(s.get("text", "Text unavailable."))
+                            else:
+                                st.info(s.get("text", "Text unavailable."))
+                        else:
+                            st.info(s.get("text", "Text unavailable."))
 
         # Save to history
         st.session_state.chat_history.append({

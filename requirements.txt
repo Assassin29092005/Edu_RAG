@@ -13,3 +13,4 @@ unstructured[docx,pptx]
 pdf2image
 pytesseract
 Pillow
+streamlit-pdf-viewer
