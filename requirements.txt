@@ -7,3 +7,5 @@ PyMuPDF
 python-docx
 python-pptx
 ollama
+rank_bm25
+python-dotenv

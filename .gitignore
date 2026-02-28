@@ -9,6 +9,7 @@ venv/
 env/
 .venv/
 ENV/
+.env
 
 # Streamlit config (if you have secrets)
 .streamlit/secrets.toml
@@ -43,3 +44,7 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Markdown / Documentation files
+*.md
+*.md.resolved

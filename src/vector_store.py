@@ -7,6 +7,9 @@ import os
 import chromadb
 from langchain_chroma import Chroma
 from src.embeddings import get_embedding_model
+from dotenv import load_dotenv
+
+load_dotenv()
 
 COLLECTION_NAME = "notego_collection"
 
@@ -17,9 +20,9 @@ def get_vector_store() -> Chroma:
     embedding_model = get_embedding_model()
 
     client = chromadb.CloudClient(
-      api_key='ck-9bkdWZWD7hV77pB5XpJ7mFypBwoKuyS1S7TLDgcJDXjq',
-      tenant='3050cc28-48d2-4f44-a434-ea4a32471d0a',
-      database='RAG_gcr'
+      api_key=os.environ.get("CHROMA_API_KEY"),
+      tenant=os.environ.get("CHROMA_TENANT"),
+      database=os.environ.get("CHROMA_DATABASE")
     )
 
     vector_store = Chroma(
@@ -88,3 +91,17 @@ def get_collection_stats(vector_store: Chroma) -> dict:
         return {"total_chunks": count}
     except Exception:
         return {"total_chunks": 0}
+
+from langchain_core.documents import Document
+
+def get_all_documents(vector_store: Chroma) -> list[Document]:
+    """Retrieve all documents currently stored in the vector database for BM25 indexing."""
+    try:
+        data = vector_store.get()
+        docs = []
+        if data and data.get("documents") and data.get("metadatas"):
+            for text, meta in zip(data["documents"], data["metadatas"]):
+                docs.append(Document(page_content=text, metadata=meta))
+        return docs
+    except Exception:
+        return []
