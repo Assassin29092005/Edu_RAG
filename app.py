@@ -169,7 +169,7 @@ with st.sidebar:
     st.markdown("### ⚙️ Models")
     st.caption("🧠 LLM: llama3 (8B)")
     st.caption("📐 Embeddings: mxbai-embed-large")
-    st.caption("💾 Vector DB: FAISS")
+    st.caption("💾 Vector DB: ChromaDB")
 
 # --- Main Area: Chat ---
 st.markdown('<h1 class="main-header">📚 NoteGo RAG</h1>', unsafe_allow_html=True)

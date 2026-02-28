@@ -76,8 +76,9 @@ def add_documents_to_store(docs: list[dict]) -> int:
     lc_docs = []
     seen_ids = set()
     for doc in docs:
-        # Create a unique ID for the parent document
-        doc_id = f"{doc['source']}_obj{doc['page']}_{hash(doc['text']) % 10000}"
+        # Create a unique ID for the parent document (sanitize to avoid InvalidKeyException)
+        safe_source = "".join([c if c.isalnum() else "_" for c in doc['source']])
+        doc_id = f"{safe_source}_obj{doc['page']}_{hash(doc['text']) % 10000}"
         if doc_id not in seen_ids:
             seen_ids.add(doc_id)
             lc_docs.append(Document(
