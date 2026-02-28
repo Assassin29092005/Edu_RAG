@@ -39,6 +39,9 @@ Rules:
 Context from course notes:
 {context}
 
+Chat History:
+{chat_history}
+
 Student's Question: {question}
 
 Helpful Answer:"""
@@ -56,12 +59,13 @@ def format_docs(docs):
     return "\n\n---\n\n".join(formatted)
 
 
-def ask_question(question: str, model_name: str = "llama3.1:8b") -> dict:
+def ask_question(question: str, chat_history: str = "", model_name: str = "llama3.1:8b") -> dict:
     """
     Ask a question and get an answer grounded in the uploaded course notes.
     
     Args:
         question: The student's question
+        chat_history: Previous conversation context, formatted as a string
         model_name: Ollama model name
     
     Returns:
@@ -93,7 +97,7 @@ def ask_question(question: str, model_name: str = "llama3.1:8b") -> dict:
 
     # Build LCEL chain
     chain = (
-        {"context": lambda x: format_docs(retrieved_docs), "question": RunnablePassthrough()}
+        {"context": lambda x: format_docs(retrieved_docs), "chat_history": lambda x: chat_history, "question": RunnablePassthrough()}
         | RAG_PROMPT
         | llm
         | StrOutputParser()
@@ -101,7 +105,7 @@ def ask_question(question: str, model_name: str = "llama3.1:8b") -> dict:
 
     answer = chain.invoke(question)
 
-    # Extract source references
+    # Extract source references and exact text
     sources = []
     seen = set()
     for doc in retrieved_docs:
@@ -110,7 +114,11 @@ def ask_question(question: str, model_name: str = "llama3.1:8b") -> dict:
         key = f"{source}_p{page}"
         if key not in seen:
             seen.add(key)
-            sources.append({"source": source, "page": page})
+            sources.append({
+                "source": source, 
+                "page": page,
+                "text": doc.page_content
+            })
 
     return {
         "answer": answer,

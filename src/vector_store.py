@@ -121,3 +121,21 @@ def get_all_documents() -> list[Document]:
         return [d for d in docs if d is not None]
     except Exception:
         return []
+
+def clear_store():
+    """Wipe the Chroma vector store and the Parent document store."""
+    try:
+        # Clear Chroma
+        store = get_vector_store()
+        store.delete_collection()
+    except Exception as e:
+        print(f"Error clearing Chroma DB: {e}")
+        
+    try:
+        # Clear Parent Document local files
+        import shutil
+        docstore_path = os.path.join(os.path.dirname(__file__), "..", "data", "docstore")
+        if os.path.exists(docstore_path):
+            shutil.rmtree(docstore_path)
+    except Exception as e:
+        print(f"Error clearing Parent Docstore: {e}")

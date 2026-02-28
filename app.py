@@ -6,7 +6,7 @@ Main Streamlit App: File upload + Chat interface
 import os
 import streamlit as st
 from src.file_parser import parse_file
-from src.vector_store import get_vector_store, add_documents_to_store, get_collection_stats
+from src.vector_store import get_vector_store, add_documents_to_store, get_collection_stats, clear_store
 from src.rag_chain import ask_question
 
 # --- Page Config ---
@@ -171,6 +171,17 @@ with st.sidebar:
     st.caption("📐 Embeddings: mxbai-embed-large")
     st.caption("💾 Vector DB: ChromaDB")
 
+    # Database Management
+    st.markdown("---")
+    st.markdown("### 🛠️ Manage")
+    if st.button("🗑️ Clear Database", use_container_width=True):
+        with st.spinner("Deleting database..."):
+            clear_store()
+            st.session_state.files_processed.clear()
+            st.session_state.chat_history.clear()
+            st.success("Database cleared successfully!")
+            st.rerun()
+
 # --- Main Area: Chat ---
 st.markdown('<h1 class="main-header">📚 NoteGo RAG</h1>', unsafe_allow_html=True)
 st.markdown('<p class="sub-header">Upload your course notes, then ask any question about them</p>', unsafe_allow_html=True)
@@ -180,11 +191,10 @@ for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("sources"):
-            source_html = " ".join(
-                f'<span class="source-badge">📄 {s["source"]} (p.{s["page"]})</span>'
-                for s in msg["sources"]
-            )
-            st.markdown(f"**Sources:** {source_html}", unsafe_allow_html=True)
+            with st.expander("🔍 View Source Documents"):
+                for s in msg["sources"]:
+                    st.markdown(f"**📄 {s['source']} (Page {s['page']})**")
+                    st.info(s.get("text", "Text unavailable."))
 
 # Chat input
 if prompt := st.chat_input("Ask a question about your course notes..."):
@@ -197,19 +207,26 @@ if prompt := st.chat_input("Ask a question about your course notes..."):
         with st.chat_message("user"):
             st.markdown(prompt)
 
+        # Format chat history
+        # We exclude the last message because it's the current prompt we just appended
+        formatted_history = ""
+        if len(st.session_state.chat_history) > 1:
+            for msg in st.session_state.chat_history[:-1]:
+                role_name = "Student" if msg["role"] == "user" else "Assistant"
+                formatted_history += f"{role_name}: {msg['content']}\n"
+
         # Generate answer
         with st.chat_message("assistant"):
             with st.spinner("🔍 Searching notes & generating answer..."):
-                result = ask_question(prompt)
+                result = ask_question(prompt, chat_history=formatted_history)
 
             st.markdown(result["answer"])
 
             if result["sources"]:
-                source_html = " ".join(
-                    f'<span class="source-badge">📄 {s["source"]} (p.{s["page"]})</span>'
-                    for s in result["sources"]
-                )
-                st.markdown(f"**Sources:** {source_html}", unsafe_allow_html=True)
+                with st.expander("🔍 View Source Documents"):
+                    for s in result["sources"]:
+                        st.markdown(f"**📄 {s['source']} (Page {s['page']})**")
+                        st.info(s.get("text", "Text unavailable."))
 
         # Save to history
         st.session_state.chat_history.append({
