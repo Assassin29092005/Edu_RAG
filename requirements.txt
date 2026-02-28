@@ -1,0 +1,9 @@
+streamlit
+langchain
+langchain-community
+langchain-chroma
+chromadb
+PyMuPDF
+python-docx
+python-pptx
+ollama
