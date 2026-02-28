@@ -3,7 +3,7 @@ rag_chain.py — RAG pipeline using LangChain Expression Language (LCEL).
 Ties retrieval (ChromaDB) + generation (Ollama llama3.1) together.
 """
 
-from langchain_community.llms import Ollama
+from langchain_ollama import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
@@ -72,7 +72,7 @@ def stream_rag_answer(question: str, chat_history: str = "", model_name: str = "
         Tuple containing the generator stream and the source references.
     """
     # Added streaming=True
-    llm = Ollama(model=model_name, temperature=0.1, streaming=True)
+    llm = OllamaLLM(model=model_name, temperature=0.1, streaming=True)
     vector_retriever = get_parent_document_retriever()
 
     # BM25 Keyword retriever

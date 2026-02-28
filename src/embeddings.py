@@ -3,7 +3,7 @@ embeddings.py — Wrapper around Ollama's mxbai-embed-large model.
 Provides a LangChain-compatible embedding class.
 """
 
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 
 
 def get_embedding_model(model_name: str = "mxbai-embed-large") -> OllamaEmbeddings:
