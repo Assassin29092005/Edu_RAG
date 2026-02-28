@@ -8,8 +8,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 import streamlit as st
-from langchain.retrievers import EnsembleRetriever
-from langchain.retrievers.multi_query import MultiQueryRetriever
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_classic.retrievers.multi_query import MultiQueryRetriever
 from langchain_community.retrievers import BM25Retriever
 from src.vector_store import get_vector_store, get_collection_stats, get_all_documents
 
