@@ -171,8 +171,11 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### ⚙️ Models")
     st.caption("🧠 LLM: llama3 (8B)")
+    st.caption("👁️ Vision: llava (7B)")
     st.caption("📐 Embeddings: mxbai-embed-large")
     st.caption("💾 Vector DB: ChromaDB")
+    
+    st.info("💡 **Tip for Images:** Before uploading PDFs/PPTXs with complex diagrams, ensure you've run `ollama pull llava:7b` in your terminal.")
 
     # Database Management
     st.markdown("---")
