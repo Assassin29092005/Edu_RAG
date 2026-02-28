@@ -1,5 +1,5 @@
 """
-vector_store.py — Chroma operations: create index, add chunks, query.
+vector_store.py — Chroma operations: create index, add documents, query.
 Persists to disk so data survives app restarts.
 """
 
@@ -9,14 +9,17 @@ from langchain_chroma import Chroma
 from src.embeddings import get_embedding_model
 from dotenv import load_dotenv
 
+from langchain_core.documents import Document
+from langchain_classic.retrievers import ParentDocumentRetriever
+from langchain_classic.storage import LocalFileStore, create_kv_docstore
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 load_dotenv()
 
 COLLECTION_NAME = "notego_collection"
 
 def get_vector_store() -> Chroma:
-    """
-    Get or create the Chroma vector store.
-    """
+    """Get or create the Chroma vector store for child chunks."""
     embedding_model = get_embedding_model()
 
     client = chromadb.CloudClient(
@@ -32,76 +35,88 @@ def get_vector_store() -> Chroma:
     )
     return vector_store
 
-def add_chunks_to_store(chunks: list[dict], vector_store: Chroma) -> int:
+def get_parent_document_retriever() -> ParentDocumentRetriever:
+    """Get the ParentDocumentRetriever which maps child chunks to parent docs."""
+    vector_store = get_vector_store()
+    
+    # Persistent store for Parent Documents
+    docstore_path = os.path.join(os.path.dirname(__file__), "..", "data", "docstore")
+    os.makedirs(docstore_path, exist_ok=True)
+    
+    fs = LocalFileStore(docstore_path)
+    store = create_kv_docstore(fs)
+    
+    # Splitter for child chunks (these get embedded)
+    child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=100)
+    
+    retriever = ParentDocumentRetriever(
+        vectorstore=vector_store,
+        docstore=store,
+        child_splitter=child_splitter,
+        search_kwargs={"k": 5} # Number of child chunks to match
+    )
+    
+    return retriever
+
+def add_documents_to_store(docs: list[dict]) -> int:
     """
-    Add text chunks to the vector store and save to disk.
+    Add full parent documents to the retriever. It handles splitting and storing.
     
     Args:
-        chunks: List of chunk dicts
-        vector_store: The Chroma vector store instance
+        docs: List of document dicts {"text": "...", "source": "xyz", "page": 1, "type": "pdf"}
     
     Returns:
-        Number of chunks added
+        Number of parent documents added
     """
-    if not chunks:
+    if not docs:
         return 0
 
-    texts = [chunk["text"] for chunk in chunks]
-    metadatas = [
-        {
-            "source": chunk["source"],
-            "page": chunk["page"],
-            "type": chunk["type"],
-        }
-        for chunk in chunks
-    ]
-    ids = [chunk["chunk_id"] for chunk in chunks]
-
-    vector_store.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+    retriever = get_parent_document_retriever()
     
-    return len(chunks)
+    lc_docs = []
+    seen_ids = set()
+    for doc in docs:
+        # Create a unique ID for the parent document
+        doc_id = f"{doc['source']}_obj{doc['page']}_{hash(doc['text']) % 10000}"
+        if doc_id not in seen_ids:
+            seen_ids.add(doc_id)
+            lc_docs.append(Document(
+                page_content=doc["text"],
+                metadata={"source": doc["source"], "page": doc["page"], "type": doc["type"], "doc_id": doc_id}
+            ))
 
-def query_store(query: str, vector_store: Chroma, k: int = 5) -> list[dict]:
-    """
-    Search the vector store for chunks most relevant to the query.
+    ids = [d.metadata["doc_id"] for d in lc_docs]
+    retriever.add_documents(lc_docs, ids=ids)
     
-    Args:
-        query: The student's question
-        vector_store: The Chroma vector store instance
-        k: Number of top results to return
-    
-    Returns:
-        List of dicts with keys: text, source, page
-    """
-    results = vector_store.similarity_search(query, k=k)
+    return len(lc_docs)
 
-    return [
-        {
-            "text": doc.page_content,
-            "source": doc.metadata.get("source", "Unknown"),
-            "page": doc.metadata.get("page", "?"),
-        }
-        for doc in results
-    ]
-
-def get_collection_stats(vector_store: Chroma) -> dict:
-    """Get basic stats about what's stored in the vector store."""
+def get_collection_stats() -> dict:
+    """Get basic stats about what's stored."""
+    vector_store = get_vector_store()
     try:
         count = len(vector_store.get()["ids"])
-        return {"total_chunks": count}
+        
+        # Approximate parent doc count
+        docstore_path = os.path.join(os.path.dirname(__file__), "..", "data", "docstore")
+        os.makedirs(docstore_path, exist_ok=True)
+        fs = LocalFileStore(docstore_path)
+        parent_count = len(list(fs.yield_keys()))
+
+        return {"total_chunks": count, "parent_docs": parent_count}
     except Exception:
-        return {"total_chunks": 0}
+        return {"total_chunks": 0, "parent_docs": 0}
 
-from langchain_core.documents import Document
-
-def get_all_documents(vector_store: Chroma) -> list[Document]:
-    """Retrieve all documents currently stored in the vector database for BM25 indexing."""
+def get_all_documents() -> list[Document]:
+    """Retrieve all parent documents currently stored. (for BM25 indexing)"""
     try:
-        data = vector_store.get()
-        docs = []
-        if data and data.get("documents") and data.get("metadatas"):
-            for text, meta in zip(data["documents"], data["metadatas"]):
-                docs.append(Document(page_content=text, metadata=meta))
-        return docs
+        docstore_path = os.path.join(os.path.dirname(__file__), "..", "data", "docstore")
+        fs = LocalFileStore(docstore_path)
+        store = create_kv_docstore(fs)
+        
+        keys = list(store.yield_keys())
+        if not keys: return []
+        
+        docs = store.mget(keys)
+        return [d for d in docs if d is not None]
     except Exception:
         return []

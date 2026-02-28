@@ -9,3 +9,7 @@ python-pptx
 ollama
 rank_bm25
 python-dotenv
+unstructured[docx,pptx]
+pdf2image
+pytesseract
+Pillow

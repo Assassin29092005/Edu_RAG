@@ -6,8 +6,7 @@ Main Streamlit App: File upload + Chat interface
 import os
 import streamlit as st
 from src.file_parser import parse_file
-from src.chunker import chunk_documents
-from src.vector_store import get_vector_store, add_chunks_to_store, get_collection_stats
+from src.vector_store import get_vector_store, add_documents_to_store, get_collection_stats
 from src.rag_chain import ask_question
 
 # --- Page Config ---
@@ -125,17 +124,16 @@ with st.sidebar:
                     with open(file_path, "wb") as f:
                         f.write(uploaded_file.getbuffer())
 
-                    # Parse → Chunk → Embed → Store
+                    # Parse and extract semantic parent documents
                     documents = parse_file(file_path)
-                    chunks = chunk_documents(documents)
-                    num_added = add_chunks_to_store(chunks, vector_store)
+                    num_added = add_documents_to_store(documents)
 
                     st.session_state.files_processed.add(uploaded_file.name)
 
                     st.markdown(
                         f'<div class="upload-success">'
                         f'✅ <strong>{uploaded_file.name}</strong><br>'
-                        f'<small>{len(documents)} pages/slides → {num_added} chunks indexed</small>'
+                        f'<small>{len(documents)} parent docs / sections indexed</small>'
                         f'</div>',
                         unsafe_allow_html=True
                     )
@@ -143,13 +141,12 @@ with st.sidebar:
     # Stats
     st.markdown("---")
     st.markdown("### 📊 Knowledge Base")
-    vector_store = get_vector_store()
-    stats = get_collection_stats(vector_store)
+    stats = get_collection_stats()
 
     col1, col2 = st.columns(2)
     with col1:
         st.markdown(
-            f'<div class="stats-card"><h3>{stats["total_chunks"]}</h3><p>Chunks Indexed</p></div>',
+            f'<div class="stats-card"><h3>{stats.get("parent_docs", stats["total_chunks"])}</h3><p>Parent Docs Indexed</p></div>',
             unsafe_allow_html=True
         )
     with col2:

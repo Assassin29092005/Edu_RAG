@@ -11,15 +11,15 @@ import streamlit as st
 from langchain_classic.retrievers import EnsembleRetriever
 from langchain_classic.retrievers.multi_query import MultiQueryRetriever
 from langchain_community.retrievers import BM25Retriever
-from src.vector_store import get_vector_store, get_collection_stats, get_all_documents
+from src.vector_store import get_vector_store, get_collection_stats, get_all_documents, get_parent_document_retriever
 
 @st.cache_resource(show_spinner=False)
-def get_bm25_retriever(_vector_store, collection_stats_hash):
+def get_bm25_retriever(collection_stats_hash):
     """
     Cache the BM25 retriever so it doesn't rebuild on every query.
     We pass a hash/count of the collection stats to invalidate the cache when new files are uploaded.
     """
-    docs = get_all_documents(_vector_store)
+    docs = get_all_documents()
     if not docs:
         return None
     bm25_retriever = BM25Retriever.from_documents(docs)
@@ -68,12 +68,11 @@ def ask_question(question: str, model_name: str = "llama3.1:8b") -> dict:
         Dict with keys: answer, sources
     """
     llm = Ollama(model=model_name, temperature=0.1)
-    vector_store = get_vector_store()
-    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+    vector_retriever = get_parent_document_retriever()
 
     # BM25 Keyword retriever
-    stats = get_collection_stats(vector_store)
-    bm25_retriever = get_bm25_retriever(vector_store, stats["total_chunks"])
+    stats = get_collection_stats()
+    bm25_retriever = get_bm25_retriever(stats.get("parent_docs", stats["total_chunks"]))
     
     if bm25_retriever:
         base_retriever = EnsembleRetriever(
