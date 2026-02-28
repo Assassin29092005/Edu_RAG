@@ -7,7 +7,8 @@ import os
 import streamlit as st
 from src.file_parser import parse_file
 from src.vector_store import get_vector_store, add_documents_to_store, get_collection_stats, clear_store
-from src.rag_chain import ask_question
+# Updated import here
+from src.rag_chain import stream_rag_answer
 
 # --- Page Config ---
 st.set_page_config(
@@ -215,22 +216,25 @@ if prompt := st.chat_input("Ask a question about your course notes..."):
                 role_name = "Student" if msg["role"] == "user" else "Assistant"
                 formatted_history += f"{role_name}: {msg['content']}\n"
 
-        # Generate answer
+        # Generate streamed answer
         with st.chat_message("assistant"):
+            # The spinner only runs while fetching documents from the multi-query/ensemble retriever
             with st.spinner("🔍 Searching notes & generating answer..."):
-                result = ask_question(prompt, chat_history=formatted_history)
+                generator, sources = stream_rag_answer(prompt, chat_history=formatted_history)
 
-            st.markdown(result["answer"])
+            # Stream out the result. st.write_stream automatically returns the complete string.
+            full_response = st.write_stream(generator)
 
-            if result["sources"]:
+            # Output the sources right below the typed response
+            if sources:
                 with st.expander("🔍 View Source Documents"):
-                    for s in result["sources"]:
+                    for s in sources:
                         st.markdown(f"**📄 {s['source']} (Page {s['page']})**")
                         st.info(s.get("text", "Text unavailable."))
 
         # Save to history
         st.session_state.chat_history.append({
             "role": "assistant",
-            "content": result["answer"],
-            "sources": result["sources"],
+            "content": full_response,
+            "sources": sources,
         })

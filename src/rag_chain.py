@@ -59,9 +59,9 @@ def format_docs(docs):
     return "\n\n---\n\n".join(formatted)
 
 
-def ask_question(question: str, chat_history: str = "", model_name: str = "llama3.1:8b") -> dict:
+def stream_rag_answer(question: str, chat_history: str = "", model_name: str = "llama3.1:8b"):
     """
-    Ask a question and get an answer grounded in the uploaded course notes.
+    Ask a question and stream an answer grounded in the uploaded course notes.
     
     Args:
         question: The student's question
@@ -69,9 +69,10 @@ def ask_question(question: str, chat_history: str = "", model_name: str = "llama
         model_name: Ollama model name
     
     Returns:
-        Dict with keys: answer, sources
+        Tuple containing the generator stream and the source references.
     """
-    llm = Ollama(model=model_name, temperature=0.1)
+    # Added streaming=True
+    llm = Ollama(model=model_name, temperature=0.1, streaming=True)
     vector_retriever = get_parent_document_retriever()
 
     # BM25 Keyword retriever
@@ -94,16 +95,19 @@ def ask_question(question: str, chat_history: str = "", model_name: str = "llama
 
     # Retrieve docs first (we need them for both the chain and source extraction)
     retrieved_docs = retriever.invoke(question)
+    context_str = format_docs(retrieved_docs)
 
     # Build LCEL chain
     chain = (
-        {"context": lambda x: format_docs(retrieved_docs), "chat_history": lambda x: chat_history, "question": RunnablePassthrough()}
+        {
+            "context": lambda x: context_str, 
+            "chat_history": lambda x: chat_history, 
+            "question": RunnablePassthrough()
+        }
         | RAG_PROMPT
         | llm
         | StrOutputParser()
     )
-
-    answer = chain.invoke(question)
 
     # Extract source references and exact text
     sources = []
@@ -120,7 +124,5 @@ def ask_question(question: str, chat_history: str = "", model_name: str = "llama
                 "text": doc.page_content
             })
 
-    return {
-        "answer": answer,
-        "sources": sources,
-    }
+    # Return the stream directly along with extracted sources
+    return chain.stream(question), sources
