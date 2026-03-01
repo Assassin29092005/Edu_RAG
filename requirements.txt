@@ -14,3 +14,9 @@ pdf2image
 pytesseract
 Pillow
 streamlit-pdf-viewer
+
+# --- External System Dependencies ---
+# Tesseract OCR is highly recommended for diagram text extraction accuracy!
+# On Windows, you MUST install the engine locally from:
+# https://github.com/UB-Mannheim/tesseract/wiki
+# And ensure it installs to: C:\Program Files\Tesseract-OCR\tesseract.exe
