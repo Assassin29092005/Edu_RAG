@@ -196,10 +196,29 @@ st.markdown('<p class="sub-header">Upload your course notes, then ask any questi
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        # Display the first relevant image from sources directly in the chat, outside the expander
+        displayed_image = False
+        images_dir = os.path.join(os.path.dirname(__file__), "data", "images")
+        
+        if msg.get("sources") and os.path.exists(images_dir):
+            for s in msg["sources"]:
+                if displayed_image:
+                    break
+                    
+                safe_filename = "".join([c if c.isalnum() else "_" for c in s["source"]])
+                page_img_prefix = f"{safe_filename}_page{s['page']}_img"
+                
+                for img_file in os.listdir(images_dir):
+                    if img_file.startswith(page_img_prefix):
+                        st.image(os.path.join(images_dir, img_file), caption=f"Relevant Diagram from {s['source']} (Page/Slide {s['page']})", use_container_width=True)
+                        displayed_image = True
+                        break
+
         if msg.get("sources"):
             with st.expander("🔍 View Source Documents"):
                 for s in msg["sources"]:
                     st.markdown(f"**📄 {s['source']} (Page {s['page']})**")
+
                     if s["source"].lower().endswith(".pdf"):
                         pdf_path = os.path.join(UPLOAD_DIR, s["source"])
                         st.write(f"DEBUG Historical: source={s['source']}, path={pdf_path}, exists={os.path.exists(pdf_path)}")
@@ -251,10 +270,29 @@ if prompt := st.chat_input("Ask a question about your course notes..."):
             full_response = st.write_stream(generator)
 
             # Output the sources right below the typed response
+            # Display the first relevant image from sources directly in the chat, outside the expander
+            displayed_image = False
+            images_dir = os.path.join(os.path.dirname(__file__), "data", "images")
+            
+            if sources and os.path.exists(images_dir):
+                for s in sources:
+                    if displayed_image:
+                        break
+                        
+                    safe_filename = "".join([c if c.isalnum() else "_" for c in s["source"]])
+                    page_img_prefix = f"{safe_filename}_page{s['page']}_img"
+                    
+                    for img_file in os.listdir(images_dir):
+                        if img_file.startswith(page_img_prefix):
+                            st.image(os.path.join(images_dir, img_file), caption=f"Relevant Diagram from {s['source']} (Page/Slide {s['page']})", use_container_width=True)
+                            displayed_image = True
+                            break
+
             if sources:
                 with st.expander("🔍 View Source Documents"):
                     for s in sources:
                         st.markdown(f"**📄 {s['source']} (Page {s['page']})**")
+
                         if s["source"].lower().endswith(".pdf"):
                             pdf_path = os.path.join(UPLOAD_DIR, s["source"])
                             st.write(f"DEBUG Active: source={s['source']}, path={pdf_path}, exists={os.path.exists(pdf_path)}")

@@ -25,11 +25,18 @@ chroma_db/
 chroma.sqlite3
 faiss_index/
 
-# Uploads directory (App specific data)
+# App specific data directories
 data/uploads/
+data/images/
+data/docstore/
+
 # If you want to keep the directory but ignore content:
 # data/uploads/*
 # !data/uploads/.gitkeep
+# data/images/*
+# !data/images/.gitkeep
+# data/docstore/*
+# !data/docstore/.gitkeep
 
 # Testing / coverage
 .pytest_cache/

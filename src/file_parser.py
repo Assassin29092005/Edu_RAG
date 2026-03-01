@@ -38,10 +38,22 @@ def parse_pdf(file_path: str) -> list[dict]:
         
         # Extract images from PDF and summarize them using Multimodal Vision
         try:
+            images_dir = os.path.join(os.path.dirname(__file__), "..", "data", "images")
+            os.makedirs(images_dir, exist_ok=True)
+            safe_filename = "".join([c if c.isalnum() else "_" for c in filename])
+
             for img_index, img in enumerate(page.get_images(full=True)):
                 xref = img[0]
                 base_image = pdf.extract_image(xref)
                 image_bytes = base_image["image"]
+                
+                # Save image to disk
+                image_ext = base_image["ext"]
+                image_filename = f"{safe_filename}_page{page_num+1}_img{img_index}.{image_ext}"
+                image_path = os.path.join(images_dir, image_filename)
+                with open(image_path, "wb") as f:
+                    f.write(image_bytes)
+
                 summary = summarize_image(image_bytes)
                 if summary:
                     text += summary
@@ -86,67 +98,90 @@ def parse_pptx(file_path: str) -> list[dict]:
     filename = os.path.basename(file_path)
     docs = []
     
-    # 1. Extract image summaries per slide using python-pptx
+    # Configure Tesseract Path (for Windows)
+    try:
+        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    except Exception:
+        pass
+
+    # 1. Extract image summaries per slide using python-pptx and OCR
     slide_summaries = {}
     try:
         prs = Presentation(file_path)
+        
+        # Prepare directory for saving extracted images
+        images_dir = os.path.join(os.path.dirname(__file__), "..", "data", "images")
+        os.makedirs(images_dir, exist_ok=True)
+        safe_filename = "".join([c if c.isalnum() else "_" for c in filename])
+
         for i, slide in enumerate(prs.slides, 1):
             slide_summaries[i] = ""
+            img_index = 0
             for shape in slide.shapes:
                 if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                     image_bytes = shape.image.blob
+                    
+                    # Save image to disk
+                    image_ext = shape.image.ext
+                    image_filename = f"{safe_filename}_page{i}_img{img_index}.{image_ext}"
+                    image_path = os.path.join(images_dir, image_filename)
+                    with open(image_path, "wb") as f:
+                        f.write(image_bytes)
+                    img_index += 1
+
+                    # Extract text physically baked into the image using OCR
+                    try:
+                        import io
+                        img = Image.open(io.BytesIO(image_bytes))
+                        ocr_text = pytesseract.image_to_string(img).strip()
+                        if ocr_text:
+                            slide_summaries[i] += f"\n[Diagram Text OCR: {ocr_text}]\n"
+                    except Exception as e:
+                        print(f"OCR Failed on image: {e}")
+
+                    # Generate semantic summary using Vision Model
                     summary = summarize_image(image_bytes)
                     if summary:
                         slide_summaries[i] += summary
     except Exception as e:
         print(f"Error parsing PPTX images {filename}: {e}")
 
-    # 2. Extract semantic text using Unstructured
+    # 2. Extract semantic text using Unstructured and group strictly by slide/page
     try:
         from unstructured.partition.pptx import partition_pptx
-        from unstructured.chunking.title import chunk_by_title
-        from unstructured.documents.elements import Text
         
         elements = partition_pptx(filename=file_path)
         
-        # Inject slide summaries as raw Unstructured elements before chunking
-        # so they get naturally grouped by title and retain correct page metadata
-        injected_elements = []
-        
-        # Track which slides we've injected from the PPTX to ensure none are missed
-        visited_pages = set()
-        
+        # Group text by page number
+        slide_texts = {}
         for el in elements:
-            # We add the original element
-            injected_elements.append(el)
-            
-            # If this is the first time we see this page number, inject its images immediately after
             page_num = el.metadata.page_number
-            if page_num and page_num not in visited_pages:
-                visited_pages.add(page_num)
-                if page_num in slide_summaries and slide_summaries[page_num]:
-                    summary_element = Text(text=slide_summaries[page_num])
-                    summary_element.metadata.page_number = page_num
-                    injected_elements.append(summary_element)
-                    
-        # If unstructured completely skipped a slide (e.g. only had an image, no text)
-        # We still need to inject that image summary as its own standalone slide/element
-        for page_num, summary in slide_summaries.items():
-            if page_num not in visited_pages and summary:
-                summary_element = Text(text=summary)
-                summary_element.metadata.page_number = page_num
-                injected_elements.append(summary_element)
+            if not page_num:
+                page_num = 1 # Fallback
                 
-        # Now chunk the mixed text + image summary elements
-        chunks = chunk_by_title(injected_elements)
+            if page_num not in slide_texts:
+                slide_texts[page_num] = []
+            
+            if el.text.strip():
+                slide_texts[page_num].append(el.text.strip())
+                
+        # Combine extracted text with generated image summaries for each slide
+        all_pages = set(slide_texts.keys()).union(set(slide_summaries.keys()))
         
-        for i, chunk in enumerate(chunks, 1):
-            chunk_text = chunk.text.strip()
-            page_num = chunk.metadata.page_number or i
+        for page_num in sorted(list(all_pages)):
+            combined_text = ""
+            
+            if page_num in slide_texts:
+                combined_text += "\n".join(slide_texts[page_num]) + "\n"
                 
-            if chunk_text.strip():
+            if page_num in slide_summaries and slide_summaries[page_num]:
+                combined_text += "\n" + slide_summaries[page_num] + "\n"
+                
+            combined_text = combined_text.strip()
+            
+            if combined_text:
                 docs.append({
-                    "text": chunk_text,
+                    "text": combined_text,
                     "source": filename,
                     "page": page_num,
                     "type": "pptx"

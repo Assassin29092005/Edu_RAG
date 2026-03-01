@@ -35,6 +35,11 @@ Rules:
 - If the answer is not in the context, say "I couldn't find this information in your uploaded notes."
 - Cite the source file and page/slide number when possible.
 - Keep your answer clear, well-structured, and student-friendly.
+- If the student provides numerical values for a math or physics problem:
+  1. Extract the relevant formula(s) from the notes.
+  2. Clearly state the formula.
+  3. Substitute the given values step-by-step.
+  4. Perform the computation carefully and state the final result clearly. Double-check your arithmetic!
 
 Context from course notes:
 {context}
@@ -87,14 +92,9 @@ def stream_rag_answer(question: str, chat_history: str = "", model_name: str = "
     else:
         base_retriever = vector_retriever
 
-    # Multi-Query Expansion
-    retriever = MultiQueryRetriever.from_llm(
-        retriever=base_retriever,
-        llm=llm
-    )
-
+    # Multi-Query Expansion Disabled (Causes keyword dilution for exact OCR diagram matches)
     # Retrieve docs first (we need them for both the chain and source extraction)
-    retrieved_docs = retriever.invoke(question)
+    retrieved_docs = base_retriever.invoke(question)
     context_str = format_docs(retrieved_docs)
 
     # Build LCEL chain

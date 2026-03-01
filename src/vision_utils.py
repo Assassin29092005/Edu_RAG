@@ -38,8 +38,10 @@ def summarize_image(image_bytes: bytes) -> str:
             messages=[{
                 'role': 'user',
                 'content': (
-                    "Please describe this image, chart, or diagram in detail. "
-                    "What are the main titles, labels, trends, or key takeaways?"
+                    "You are an expert OCR text extractor and image analyzer. "
+                    "First, accurately transcribe EVERY SINGLE WORD, title, axis label, and text "
+                    "you can read in this image, chart, or diagram. State the text clearly. "
+                    "Second, provide a detailed description of the diagram's structure, flow, or key takeaways."
                 ),
                 'images': [b64_image]
             }]
