@@ -15,6 +15,12 @@ from unstructured.chunking.title import chunk_by_title
 
 from src.vision_utils import summarize_image
 
+# Configure Tesseract Path (for Windows)
+try:
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+except Exception:
+    pass
+
 def parse_pdf(file_path: str) -> list[dict]:
     """Extract text page-by-page from a PDF file. Falls back to OCR for scanned pages."""
     docs = []
@@ -97,12 +103,6 @@ def parse_pptx(file_path: str) -> list[dict]:
     """Extract text semantically from a PPTX file and summarize images."""
     filename = os.path.basename(file_path)
     docs = []
-    
-    # Configure Tesseract Path (for Windows)
-    try:
-        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-    except Exception:
-        pass
 
     # 1. Extract image summaries per slide using python-pptx and OCR
     slide_summaries = {}
