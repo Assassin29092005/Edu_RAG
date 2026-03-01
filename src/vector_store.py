@@ -136,5 +136,10 @@ def clear_store():
         docstore_path = os.path.join(os.path.dirname(__file__), "..", "data", "docstore")
         if os.path.exists(docstore_path):
             shutil.rmtree(docstore_path)
+            
+        # Clear extracted images
+        images_path = os.path.join(os.path.dirname(__file__), "..", "data", "images")
+        if os.path.exists(images_path):
+            shutil.rmtree(images_path)
     except Exception as e:
-        print(f"Error clearing Parent Docstore: {e}")
+        print(f"Error clearing Parent Docstore or Images: {e}")
