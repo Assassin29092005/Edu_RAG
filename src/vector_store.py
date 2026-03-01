@@ -22,11 +22,10 @@ def get_vector_store() -> Chroma:
     """Get or create the Chroma vector store for child chunks."""
     embedding_model = get_embedding_model()
 
-    client = chromadb.CloudClient(
-      api_key=os.environ.get("CHROMA_API_KEY"),
-      tenant=os.environ.get("CHROMA_TENANT"),
-      database=os.environ.get("CHROMA_DATABASE")
-    )
+    db_path = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
+    os.makedirs(db_path, exist_ok=True)
+    
+    client = chromadb.PersistentClient(path=db_path)
 
     vector_store = Chroma(
         client=client,
