@@ -5,6 +5,7 @@ Supports single-collection and dual-collection retrieval, re-ranking, and citati
 """
 
 import re
+import hashlib
 import logging
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
@@ -14,7 +15,7 @@ import streamlit as st
 from langchain_classic.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
 from src.vector_store import (
-    get_vector_store, get_collection_stats, get_all_documents,
+    get_vector_store, get_all_documents,
     get_parent_document_retriever, get_filtered_vector_retriever,
     ADMIN_COLLECTION, STUDENT_COLLECTION
 )
@@ -29,7 +30,9 @@ logger = logging.getLogger(__name__)
 @st.cache_resource(show_spinner=False)
 def get_bm25_retriever(_cache_key):
     """
-    Cache the BM25 retriever. Pass (collection_name, doc_count) as cache key.
+    Cache the BM25 retriever. Pass (collection_name, content_hash) as cache key.
+    Content hash is computed from document IDs so cache invalidates when
+    docs are deleted and re-added (even if count stays the same).
     """
     if isinstance(_cache_key, tuple):
         collection_name, _ = _cache_key
@@ -42,6 +45,13 @@ def get_bm25_retriever(_cache_key):
     bm25_retriever = BM25Retriever.from_documents(docs)
     bm25_retriever.k = 10  # Fetch more candidates for re-ranking
     return bm25_retriever
+
+
+def _compute_content_hash(collection_name: str) -> str:
+    """Compute a hash based on document IDs for cache invalidation."""
+    docs = get_all_documents(collection_name)
+    doc_ids = sorted([d.metadata.get("doc_id", str(id(d))) for d in docs])
+    return hashlib.md5("|".join(doc_ids).encode()).hexdigest()
 
 
 # Prompt template with numbered source citations
@@ -126,8 +136,8 @@ def _build_ensemble_retriever(collection_name: str):
     """Build an EnsembleRetriever (vector + BM25) for a given collection, with optional re-ranking."""
     vector_retriever = get_parent_document_retriever(collection_name)
 
-    stats = get_collection_stats(collection_name)
-    cache_key = (collection_name, stats.get("parent_docs", stats["total_chunks"]))
+    content_hash = _compute_content_hash(collection_name)
+    cache_key = (collection_name, content_hash)
     bm25_retriever = get_bm25_retriever(cache_key)
 
     if bm25_retriever:
@@ -214,10 +224,17 @@ def verify_answer_against_context(answer: str, context: str) -> dict:
     }
 
 
-def stream_rag_answer(question: str, collection_name: str = ADMIN_COLLECTION, chat_history: str = ""):
+def stream_rag_answer(question: str, collection_name: str = ADMIN_COLLECTION,
+                      chat_history: str = "", extra_context: str = ""):
     """
     Ask a question and stream an answer grounded in uploaded course notes.
     Single-collection retrieval (used by admin).
+
+    Args:
+        question: The user's question
+        collection_name: Which collection to retrieve from
+        chat_history: Formatted conversation history
+        extra_context: Optional extra context to prepend (e.g. formula docs)
 
     Returns:
         Tuple of (generator_stream, sources, retrieved_docs)
@@ -226,7 +243,7 @@ def stream_rag_answer(question: str, collection_name: str = ADMIN_COLLECTION, ch
 
     retriever = _build_ensemble_retriever(collection_name)
     retrieved_docs = retriever.invoke(question)
-    context_str = format_docs(retrieved_docs)
+    context_str = extra_context + format_docs(retrieved_docs)
 
     chain = (
         {

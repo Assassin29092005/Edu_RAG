@@ -311,7 +311,7 @@ def parse_file(file_path: str, images_dir: str = None) -> list[dict]:
         return parse_pdf(file_path, images_dir)
     elif ext == ".docx":
         return parse_docx(file_path, images_dir)
-    elif ext in (".ppt", ".pptx"):
+    elif ext == ".pptx":
         return parse_pptx(file_path, images_dir)
     else:
         raise ValueError(f"Unsupported file format: {ext}")

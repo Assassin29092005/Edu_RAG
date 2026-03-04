@@ -67,3 +67,5 @@ Thumbs.db
 *.md.resolved
 
 .claude/
+
+upgrades.txt
