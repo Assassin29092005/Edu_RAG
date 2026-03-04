@@ -1,6 +1,7 @@
 streamlit
 langchain
 langchain-community
+langchain-classic
 langchain-chroma
 chromadb
 PyMuPDF
@@ -14,6 +15,14 @@ pdf2image
 pytesseract
 Pillow
 streamlit-pdf-viewer
+langchain-ollama
+
+# Phase 3 — Structured PDF parsing
+pymupdf4llm
+
+# Phase 4 — Semantic chunking + cross-encoder re-ranking
+langchain-experimental
+flashrank
 
 # --- External System Dependencies ---
 # Tesseract OCR is highly recommended for diagram text extraction accuracy!

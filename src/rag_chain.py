@@ -1,39 +1,57 @@
 """
 rag_chain.py — RAG pipeline using LangChain Expression Language (LCEL).
-Ties retrieval (ChromaDB) + generation (Ollama llama3.1) together.
+Ties retrieval (ChromaDB) + generation (Ollama) together.
+Supports single-collection and dual-collection retrieval, re-ranking, and citations.
 """
 
+import re
+import logging
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 import streamlit as st
 from langchain_classic.retrievers import EnsembleRetriever
-from langchain_classic.retrievers.multi_query import MultiQueryRetriever
 from langchain_community.retrievers import BM25Retriever
-from src.vector_store import get_vector_store, get_collection_stats, get_all_documents, get_parent_document_retriever
+from src.vector_store import (
+    get_vector_store, get_collection_stats, get_all_documents,
+    get_parent_document_retriever, get_filtered_vector_retriever,
+    ADMIN_COLLECTION, STUDENT_COLLECTION
+)
+from src.config import (
+    llm_model, llm_temperature, bm25_weight, vector_weight,
+    reranker_top_n, verification_enabled, coverage_threshold
+)
+
+logger = logging.getLogger(__name__)
+
 
 @st.cache_resource(show_spinner=False)
-def get_bm25_retriever(collection_stats_hash):
+def get_bm25_retriever(_cache_key):
     """
-    Cache the BM25 retriever so it doesn't rebuild on every query.
-    We pass a hash/count of the collection stats to invalidate the cache when new files are uploaded.
+    Cache the BM25 retriever. Pass (collection_name, doc_count) as cache key.
     """
-    docs = get_all_documents()
+    if isinstance(_cache_key, tuple):
+        collection_name, _ = _cache_key
+    else:
+        collection_name = ADMIN_COLLECTION
+
+    docs = get_all_documents(collection_name)
     if not docs:
         return None
     bm25_retriever = BM25Retriever.from_documents(docs)
-    bm25_retriever.k = 5
+    bm25_retriever.k = 10  # Fetch more candidates for re-ranking
     return bm25_retriever
 
-# Prompt template that keeps the LLM grounded in course material
-RAG_PROMPT_TEMPLATE = """You are a helpful teaching assistant. Answer the student's question 
+
+# Prompt template with numbered source citations
+RAG_PROMPT_TEMPLATE = """You are a helpful teaching assistant. Answer the student's question
 using ONLY the following context from their course notes.
 
 Rules:
 - Answer accurately based on the context provided.
+- After each factual claim, place a citation marker [N] matching the source number from the context.
 - If the answer is not in the context, say "I couldn't find this information in your uploaded notes."
-- Cite the source file and page/slide number when possible.
 - Keep your answer clear, well-structured, and student-friendly.
 - IMPORTANT FOR CODE: If the context contains programming code (like Python, Java, R, SQL, etc.), you MUST re-format it cleanly in your response. Wrap any multiline code blocks in standard Markdown backticks (```python) and preserve all indentation and spacing exactly as it appears in the notes!
 - If the student provides numerical values for a math or physics problem:
@@ -55,54 +73,165 @@ Helpful Answer:"""
 RAG_PROMPT = ChatPromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
 
 
+COMPARE_PROMPT_TEMPLATE = """You are a helpful teaching assistant performing a comparative analysis.
+Compare the following information from two different sources.
+
+Source 1 ({source1_name}):
+{source1_context}
+
+Source 2 ({source2_name}):
+{source2_context}
+
+Chat History:
+{chat_history}
+
+Student's Question: {question}
+
+Structure your response as:
+## What {source1_name} Says
+<summary of source 1>
+
+## What {source2_name} Says
+<summary of source 2>
+
+## Similarities
+<common points>
+
+## Differences
+<key differences>
+
+Helpful Answer:"""
+
+COMPARE_PROMPT = ChatPromptTemplate.from_template(COMPARE_PROMPT_TEMPLATE)
+
+
 def format_docs(docs):
-    """Format retrieved documents into a single context string."""
+    """Format retrieved documents into a numbered context string with citation markers."""
     formatted = []
-    for doc in docs:
+    for i, doc in enumerate(docs, 1):
         source = doc.metadata.get("source", "Unknown")
         page = doc.metadata.get("page", "?")
-        formatted.append(f"[Source: {source}, Page/Slide: {page}]\n{doc.page_content}")
+
+        # Strip contextual chunk header if present (metadata already carries source/page)
+        content = doc.page_content
+        if doc.metadata.get("has_context_header"):
+            # Remove the header line "[Document: ... | Page: ...]\n\n"
+            content = re.sub(r'^\[Document:.*?\| Page:.*?\]\n\n', '', content)
+
+        formatted.append(f"[{i}] [Source: {source}, Page/Slide: {page}]\n{content}")
     return "\n\n---\n\n".join(formatted)
 
 
-def stream_rag_answer(question: str, chat_history: str = "", model_name: str = "llama3.1:8b"):
-    """
-    Ask a question and stream an answer grounded in the uploaded course notes.
-    
-    Args:
-        question: The student's question
-        chat_history: Previous conversation context, formatted as a string
-        model_name: Ollama model name
-    
-    Returns:
-        Tuple containing the generator stream and the source references.
-    """
-    # Added streaming=True
-    llm = OllamaLLM(model=model_name, temperature=0.1, streaming=True)
-    vector_retriever = get_parent_document_retriever()
+def _build_ensemble_retriever(collection_name: str):
+    """Build an EnsembleRetriever (vector + BM25) for a given collection, with optional re-ranking."""
+    vector_retriever = get_parent_document_retriever(collection_name)
 
-    # BM25 Keyword retriever
-    stats = get_collection_stats()
-    bm25_retriever = get_bm25_retriever(stats.get("parent_docs", stats["total_chunks"]))
-    
+    stats = get_collection_stats(collection_name)
+    cache_key = (collection_name, stats.get("parent_docs", stats["total_chunks"]))
+    bm25_retriever = get_bm25_retriever(cache_key)
+
     if bm25_retriever:
         base_retriever = EnsembleRetriever(
             retrievers=[vector_retriever, bm25_retriever],
-            weights=[0.5, 0.5]
+            weights=[vector_weight(), bm25_weight()]
         )
     else:
         base_retriever = vector_retriever
 
-    # Multi-Query Expansion Disabled (Causes keyword dilution for exact OCR diagram matches)
-    # Retrieve docs first (we need them for both the chain and source extraction)
-    retrieved_docs = base_retriever.invoke(question)
+    # Try to apply cross-encoder re-ranking
+    try:
+        from langchain_community.document_compressors.flashrank_rerank import FlashrankRerank
+        from langchain_classic.retrievers import ContextualCompressionRetriever
+
+        compressor = FlashrankRerank(model="ms-marco-MiniLM-L-12-v2", top_n=reranker_top_n())
+        reranked_retriever = ContextualCompressionRetriever(
+            base_compressor=compressor, base_retriever=base_retriever
+        )
+        logger.info("Using FlashRank re-ranking for collection '%s'", collection_name)
+        return reranked_retriever
+    except ImportError:
+        logger.info("FlashRank not installed, skipping re-ranking for '%s'", collection_name)
+        return base_retriever
+
+
+def verify_answer_against_context(answer: str, context: str) -> dict:
+    """
+    Rule-based sentence-level coverage check.
+    Splits answer into sentences, checks Jaccard word overlap against context.
+    """
+    import string
+
+    def tokenize(text):
+        text = text.lower()
+        text = text.translate(str.maketrans('', '', string.punctuation))
+        return set(text.split())
+
+    # Split answer into sentences
+    sentences = re.split(r'(?<=[.!?])\s+', answer.strip())
+    sentences = [s for s in sentences if len(s.split()) > 3]  # Skip very short fragments
+
+    if not sentences:
+        return {"coverage_score": 1.0, "verdict": "GROUNDED", "unverified_sentences": []}
+
+    context_tokens = tokenize(context)
+    verified = 0
+    unverified = []
+
+    for sentence in sentences:
+        # Skip citation markers and meta-text
+        clean = re.sub(r'\[\d+\]', '', sentence)
+        if clean.lower().startswith("i couldn't find"):
+            verified += 1
+            continue
+
+        sent_tokens = tokenize(clean)
+        if not sent_tokens:
+            verified += 1
+            continue
+
+        overlap = len(sent_tokens & context_tokens)
+        jaccard = overlap / len(sent_tokens) if sent_tokens else 0
+
+        if jaccard >= 0.3:
+            verified += 1
+        else:
+            unverified.append(sentence)
+
+    score = verified / len(sentences) if sentences else 1.0
+    threshold = coverage_threshold()
+
+    if score >= threshold:
+        verdict = "GROUNDED"
+    elif score >= 0.5:
+        verdict = "PARTIAL"
+    else:
+        verdict = "UNCERTAIN"
+
+    return {
+        "coverage_score": score,
+        "verdict": verdict,
+        "unverified_sentences": unverified,
+    }
+
+
+def stream_rag_answer(question: str, collection_name: str = ADMIN_COLLECTION, chat_history: str = ""):
+    """
+    Ask a question and stream an answer grounded in uploaded course notes.
+    Single-collection retrieval (used by admin).
+
+    Returns:
+        Tuple of (generator_stream, sources, retrieved_docs)
+    """
+    llm = OllamaLLM(model=llm_model(), temperature=llm_temperature(), streaming=True)
+
+    retriever = _build_ensemble_retriever(collection_name)
+    retrieved_docs = retriever.invoke(question)
     context_str = format_docs(retrieved_docs)
 
-    # Build LCEL chain
     chain = (
         {
-            "context": lambda x: context_str, 
-            "chat_history": lambda x: chat_history, 
+            "context": lambda x: context_str,
+            "chat_history": lambda x: chat_history,
             "question": RunnablePassthrough()
         }
         | RAG_PROMPT
@@ -110,7 +239,6 @@ def stream_rag_answer(question: str, chat_history: str = "", model_name: str = "
         | StrOutputParser()
     )
 
-    # Extract source references and exact text
     sources = []
     seen = set()
     for doc in retrieved_docs:
@@ -120,10 +248,142 @@ def stream_rag_answer(question: str, chat_history: str = "", model_name: str = "
         if key not in seen:
             seen.add(key)
             sources.append({
-                "source": source, 
+                "source": source,
                 "page": page,
                 "text": doc.page_content
             })
 
-    # Return the stream directly along with extracted sources
-    return chain.stream(question), sources
+    return chain.stream(question), sources, retrieved_docs
+
+
+def stream_rag_answer_dual(question: str, chat_history: str = ""):
+    """
+    Dual-collection retrieval (used by student).
+    Queries BOTH admin and student collections, merges results by doc_id dedup.
+
+    Returns:
+        Tuple of (generator_stream, sources, retrieved_docs)
+    """
+    llm = OllamaLLM(model=llm_model(), temperature=llm_temperature(), streaming=True)
+
+    # Retrieve from both collections
+    admin_retriever = _build_ensemble_retriever(ADMIN_COLLECTION)
+    student_retriever = _build_ensemble_retriever(STUDENT_COLLECTION)
+
+    admin_docs = admin_retriever.invoke(question)
+    student_docs = student_retriever.invoke(question)
+
+    # Merge and deduplicate by doc_id
+    seen_ids = set()
+    merged_docs = []
+    for doc in admin_docs + student_docs:
+        doc_id = doc.metadata.get("doc_id", id(doc))
+        if doc_id not in seen_ids:
+            seen_ids.add(doc_id)
+            merged_docs.append(doc)
+
+    context_str = format_docs(merged_docs)
+
+    chain = (
+        {
+            "context": lambda x: context_str,
+            "chat_history": lambda x: chat_history,
+            "question": RunnablePassthrough()
+        }
+        | RAG_PROMPT
+        | llm
+        | StrOutputParser()
+    )
+
+    sources = []
+    seen = set()
+    for doc in merged_docs:
+        source = doc.metadata.get("source", "Unknown")
+        page = doc.metadata.get("page", "?")
+        key = f"{source}_p{page}"
+        if key not in seen:
+            seen.add(key)
+            sources.append({
+                "source": source,
+                "page": page,
+                "text": doc.page_content
+            })
+
+    return chain.stream(question), sources, merged_docs
+
+
+def stream_comparative_answer(question: str, source1: str, source2: str,
+                              collection_name: str = ADMIN_COLLECTION, chat_history: str = ""):
+    """
+    Comparative analysis: retrieves from two specific sources and generates structured comparison.
+
+    Returns:
+        Tuple of (generator_stream, sources, retrieved_docs)
+    """
+    llm = OllamaLLM(model=llm_model(), temperature=llm_temperature(), streaming=True)
+
+    ret1 = get_filtered_vector_retriever(collection_name, source1)
+    ret2 = get_filtered_vector_retriever(collection_name, source2)
+
+    docs1 = ret1.invoke(question)
+    docs2 = ret2.invoke(question)
+
+    context1 = format_docs(docs1)
+    context2 = format_docs(docs2)
+
+    chain = (
+        {
+            "source1_name": lambda x: source1,
+            "source2_name": lambda x: source2,
+            "source1_context": lambda x: context1,
+            "source2_context": lambda x: context2,
+            "chat_history": lambda x: chat_history,
+            "question": RunnablePassthrough()
+        }
+        | COMPARE_PROMPT
+        | llm
+        | StrOutputParser()
+    )
+
+    all_docs = docs1 + docs2
+    sources = []
+    seen = set()
+    for doc in all_docs:
+        source = doc.metadata.get("source", "Unknown")
+        page = doc.metadata.get("page", "?")
+        key = f"{source}_p{page}"
+        if key not in seen:
+            seen.add(key)
+            sources.append({"source": source, "page": page, "text": doc.page_content})
+
+    return chain.stream(question), sources, all_docs
+
+
+def detect_comparison_intent(question: str, available_sources: list[str]) -> tuple:
+    """
+    Detect if a question is asking for comparison between two sources.
+    Returns (is_comparison, source1, source2) or (False, None, None).
+    """
+    comparison_keywords = ["compare", "vs", "versus", "difference between", "differences between",
+                           "contrast", "similar", "similarities between"]
+
+    question_lower = question.lower()
+    is_comparison = any(kw in question_lower for kw in comparison_keywords)
+
+    if not is_comparison:
+        return False, None, None
+
+    matched = []
+    for src in available_sources:
+        name_lower = src.lower().replace(".pdf", "").replace(".docx", "").replace(".pptx", "")
+        # Check if any significant part of the filename appears in the question
+        parts = re.split(r'[_\s\-]+', name_lower)
+        for part in parts:
+            if len(part) > 2 and part in question_lower:
+                matched.append(src)
+                break
+
+    if len(matched) >= 2:
+        return True, matched[0], matched[1]
+
+    return False, None, None

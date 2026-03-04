@@ -1,18 +1,23 @@
 """
-embeddings.py — Wrapper around Ollama's mxbai-embed-large model.
+embeddings.py — Wrapper around Ollama's embedding model.
 Provides a LangChain-compatible embedding class.
 """
 
+import logging
 from langchain_ollama import OllamaEmbeddings
+from src.config import embeddings_model
+
+logger = logging.getLogger(__name__)
 
 
-def get_embedding_model(model_name: str = "mxbai-embed-large") -> OllamaEmbeddings:
+def get_embedding_model(model_name: str = None) -> OllamaEmbeddings:
     """
     Returns an Ollama embedding model instance compatible with LangChain.
-    
+
     Args:
         model_name: Ollama model to use for embeddings.
-                    Default: mxbai-embed-large (best for English RAG).
-                    Alternative: bge-m3 (for multilingual notes).
+                    Default read from config.toml (mxbai-embed-large).
     """
-    return OllamaEmbeddings(model=model_name)
+    name = model_name or embeddings_model()
+    logger.info("Using embedding model: %s", name)
+    return OllamaEmbeddings(model=name)

@@ -9,6 +9,8 @@ venv/
 env/
 .venv/
 ENV/
+
+# Environment variables (secrets)
 .env
 
 # Streamlit config (if you have secrets)
@@ -27,8 +29,16 @@ faiss_index/
 
 # App specific data directories
 data/uploads/
+data/uploads_admin/
+data/uploads_student/
 data/images/
+data/images_admin/
+data/images_student/
 data/docstore/
+data/docstore_admin/
+data/docstore_student/
+data/processed_files_admin.json
+data/processed_files_student.json
 
 # If you want to keep the directory but ignore content:
 # data/uploads/*
@@ -55,3 +65,5 @@ Thumbs.db
 # Markdown / Documentation files
 *.md
 *.md.resolved
+
+.claude/

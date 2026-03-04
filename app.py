@@ -1,18 +1,15 @@
 """
 NoteGo RAG — Course Notes Q&A System
-Main Streamlit App: File upload + Chat interface
+Auth router: Login page + st.navigation to Admin/Student pages.
 """
 
 import os
 import streamlit as st
-from src.file_parser import parse_file
-from src.vector_store import get_vector_store, add_documents_to_store, get_collection_stats, clear_store
-# Updated import here
-from src.rag_chain import stream_rag_answer
-from streamlit_pdf_viewer import pdf_viewer
-from src.pdf_utils import get_pdf_annotations
+from dotenv import load_dotenv
 
-# --- Page Config ---
+load_dotenv()
+
+# --- Page Config (MUST be first Streamlit call) ---
 st.set_page_config(
     page_title="NoteGo RAG",
     page_icon="📚",
@@ -20,303 +17,86 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- Custom CSS for premium look ---
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+# --- Ollama Health Check ---
+try:
+    import ollama
+    ollama.list()
+except Exception:
+    st.error("⚠️ **Ollama is not running.** Please start it with `ollama serve` in your terminal.")
+    st.stop()
 
-    * { font-family: 'Inter', sans-serif; }
+# --- Auth helpers ---
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+STUDENT_PASSWORD = os.getenv("STUDENT_PASSWORD", "student123")
 
-    .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-size: 2.5rem;
-        font-weight: 700;
-        text-align: center;
-        margin-bottom: 0;
-    }
 
-    .sub-header {
-        text-align: center;
-        color: #888;
-        font-size: 1rem;
-        margin-top: -10px;
-        margin-bottom: 30px;
-    }
+def logout():
+    """Clear auth state and rerun."""
+    for key in ["authenticated", "role"]:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.rerun()
 
-    .source-badge {
-        display: inline-block;
-        background: linear-gradient(135deg, #667eea22, #764ba222);
-        border: 1px solid #667eea44;
-        border-radius: 8px;
-        padding: 4px 10px;
-        margin: 3px 4px 3px 0;
-        font-size: 0.8rem;
-        color: #667eea;
-    }
 
-    .stats-card {
-        background: linear-gradient(135deg, #1a1a2e, #16213e);
-        border-radius: 12px;
-        padding: 18px;
-        text-align: center;
-        border: 1px solid #334155;
-    }
+def login_page():
+    """Render the login page."""
+    st.markdown("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        * { font-family: 'Inter', sans-serif; }
+        .login-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-size: 3rem;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 0;
+        }
+        .login-sub {
+            text-align: center;
+            color: #888;
+            font-size: 1.1rem;
+            margin-top: -5px;
+            margin-bottom: 40px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
-    .stats-card h3 {
-        color: #667eea;
-        font-size: 1.8rem;
-        margin: 0;
-    }
+    st.markdown('<h1 class="login-header">📚 NoteGo RAG</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="login-sub">Course Notes Q&A System</p>', unsafe_allow_html=True)
 
-    .stats-card p {
-        color: #94a3b8;
-        font-size: 0.85rem;
-        margin: 5px 0 0 0;
-    }
-
-    .upload-success {
-        background: linear-gradient(135deg, #065f4622, #10b98122);
-        border: 1px solid #10b98144;
-        border-radius: 10px;
-        padding: 12px 16px;
-        margin: 8px 0;
-    }
-
-    div[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0f172a, #1e293b);
-    }
-
-    .stChatMessage {
-        border-radius: 12px !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# --- Upload directory ---
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "data", "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-# --- Session state ---
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "files_processed" not in st.session_state:
-    st.session_state.files_processed = set()
-
-# --- Sidebar: File Upload & Stats ---
-with st.sidebar:
-    st.markdown("### 📁 Upload Course Notes")
-    st.caption("Supported: PDF, DOCX, PPTX")
-
-    uploaded_files = st.file_uploader(
-        "Drag & drop your files",
-        type=["pdf", "docx", "pptx"],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-    )
-
-    if uploaded_files:
-        vector_store = get_vector_store()
-
-        for uploaded_file in uploaded_files:
-            if uploaded_file.name not in st.session_state.files_processed:
-                with st.spinner(f"Processing **{uploaded_file.name}**..."):
-                    # Save to disk
-                    file_path = os.path.join(UPLOAD_DIR, uploaded_file.name)
-                    with open(file_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-
-                    # Parse and extract semantic parent documents
-                    documents = parse_file(file_path)
-                    num_added = add_documents_to_store(documents)
-
-                    st.session_state.files_processed.add(uploaded_file.name)
-
-                    st.markdown(
-                        f'<div class="upload-success">'
-                        f'✅ <strong>{uploaded_file.name}</strong><br>'
-                        f'<small>{len(documents)} parent docs / sections indexed</small>'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
-
-    # Stats
-    st.markdown("---")
-    st.markdown("### 📊 Knowledge Base")
-    stats = get_collection_stats()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(
-            f'<div class="stats-card"><h3>{stats.get("parent_docs", stats["total_chunks"])}</h3><p>Parent Docs Indexed</p></div>',
-            unsafe_allow_html=True
-        )
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown(
-            f'<div class="stats-card"><h3>{len(st.session_state.files_processed)}</h3><p>Files Uploaded</p></div>',
-            unsafe_allow_html=True
-        )
+        role = st.selectbox("Select your role", ["Admin", "Student"], key="login_role")
+        password = st.text_input("Password", type="password", key="login_password")
 
-    # Uploaded files list
-    if st.session_state.files_processed:
-        st.markdown("---")
-        st.markdown("### 📄 Uploaded Files")
-        for fname in sorted(st.session_state.files_processed):
-            ext = os.path.splitext(fname)[1].lower()
-            icon = {"pdf": "📕", "docx": "📘", "pptx": "📙"}.get(ext.strip("."), "📄")
-            st.caption(f"{icon} {fname}")
+        if st.button("Login", use_container_width=True, type="primary"):
+            if role == "Admin" and password == ADMIN_PASSWORD:
+                st.session_state.authenticated = True
+                st.session_state.role = "admin"
+                st.rerun()
+            elif role == "Student" and password == STUDENT_PASSWORD:
+                st.session_state.authenticated = True
+                st.session_state.role = "student"
+                st.rerun()
+            else:
+                st.error("Invalid password. Please try again.")
 
-    # Model info
-    st.markdown("---")
-    st.markdown("### ⚙️ Models")
-    st.caption("🧠 LLM: llama3 (8B)")
-    st.caption("👁️ Vision: llava (7B)")
-    st.caption("📐 Embeddings: mxbai-embed-large")
-    st.caption("💾 Vector DB: ChromaDB")
-    
-    st.info("💡 **Tip for Images:** Before uploading PDFs/PPTXs with complex diagrams, ensure you've run `ollama pull llava:7b` in your terminal.")
 
-    # Database Management
-    st.markdown("---")
-    st.markdown("### 🛠️ Manage")
-    if st.button("🗑️ Clear Database", use_container_width=True):
-        with st.spinner("Deleting database..."):
-            clear_store()
-            st.session_state.files_processed.clear()
-            st.session_state.chat_history.clear()
-            st.success("Database cleared successfully!")
-            st.rerun()
+# --- Main routing logic ---
+if not st.session_state.get("authenticated"):
+    login_page()
+else:
+    role = st.session_state.get("role", "student")
 
-# --- Main Area: Chat ---
-st.markdown('<h1 class="main-header">📚 NoteGo RAG</h1>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Upload your course notes, then ask any question about them</p>', unsafe_allow_html=True)
+    logout_page = st.Page(logout, title="Logout", icon="🚪")
 
-# Display chat history
-for msg in st.session_state.chat_history:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        # Display the first relevant image from sources directly in the chat, outside the expander
-        displayed_image = False
-        images_dir = os.path.join(os.path.dirname(__file__), "data", "images")
-        
-        if msg.get("sources") and os.path.exists(images_dir):
-            for s in msg["sources"]:
-                if displayed_image:
-                    break
-                    
-                safe_filename = "".join([c if c.isalnum() else "_" for c in s["source"]])
-                page_img_prefix = f"{safe_filename}_page{s['page']}_img"
-                
-                for img_file in os.listdir(images_dir):
-                    if img_file.startswith(page_img_prefix):
-                        st.image(os.path.join(images_dir, img_file), caption=f"Relevant Diagram from {s['source']} (Page/Slide {s['page']})", use_container_width=True)
-                        displayed_image = True
-                        break
-
-        if msg.get("sources"):
-            with st.expander("🔍 View Source Documents"):
-                for s in msg["sources"]:
-                    st.markdown(f"**📄 {s['source']} (Page {s['page']})**")
-
-                    if s["source"].lower().endswith(".pdf"):
-                        pdf_path = os.path.join(UPLOAD_DIR, s["source"])
-                        st.write(f"DEBUG Historical: source={s['source']}, path={pdf_path}, exists={os.path.exists(pdf_path)}")
-                        if os.path.exists(pdf_path):
-                            # Ensure page is an int
-                            page_num = int(s["page"])
-                            try:
-                                annotations = get_pdf_annotations(pdf_path, page_num, s.get("text", ""))
-                                pdf_viewer(
-                                    input=pdf_path,
-                                    width=700,
-                                    annotations=annotations,
-                                    pages_to_render=[page_num]
-                                )
-                            except Exception as e:
-                                st.error(f"Error viewing PDF: {e}")
-                                st.info(s.get("text", "Text unavailable."))
-                        else:
-                            st.info(s.get("text", "Text unavailable."))
-                    else:
-                        st.info(s.get("text", "Text unavailable."))
-
-# Chat input
-if prompt := st.chat_input("Ask a question about your course notes..."):
-    # Check if any files are uploaded
-    if stats["total_chunks"] == 0:
-        st.warning("⚠️ Please upload some course notes first using the sidebar!")
+    if role == "admin":
+        admin_page = st.Page("pages/admin.py", title="Admin Panel", icon="🔧", default=True)
+        nav = st.navigation([admin_page, logout_page])
     else:
-        # Show user message
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+        student_page = st.Page("pages/student.py", title="Student Portal", icon="🎓", default=True)
+        nav = st.navigation([student_page, logout_page])
 
-        # Format chat history
-        # We exclude the last message because it's the current prompt we just appended
-        formatted_history = ""
-        if len(st.session_state.chat_history) > 1:
-            for msg in st.session_state.chat_history[:-1]:
-                role_name = "Student" if msg["role"] == "user" else "Assistant"
-                formatted_history += f"{role_name}: {msg['content']}\n"
-
-        # Generate streamed answer
-        with st.chat_message("assistant"):
-            # The spinner only runs while fetching documents from the multi-query/ensemble retriever
-            with st.spinner("🔍 Searching notes & generating answer..."):
-                generator, sources = stream_rag_answer(prompt, chat_history=formatted_history)
-
-            # Stream out the result. st.write_stream automatically returns the complete string.
-            full_response = st.write_stream(generator)
-
-            # Output the sources right below the typed response
-            # Display the first relevant image from sources directly in the chat, outside the expander
-            displayed_image = False
-            images_dir = os.path.join(os.path.dirname(__file__), "data", "images")
-            
-            if sources and os.path.exists(images_dir):
-                for s in sources:
-                    if displayed_image:
-                        break
-                        
-                    safe_filename = "".join([c if c.isalnum() else "_" for c in s["source"]])
-                    page_img_prefix = f"{safe_filename}_page{s['page']}_img"
-                    
-                    for img_file in os.listdir(images_dir):
-                        if img_file.startswith(page_img_prefix):
-                            st.image(os.path.join(images_dir, img_file), caption=f"Relevant Diagram from {s['source']} (Page/Slide {s['page']})", use_container_width=True)
-                            displayed_image = True
-                            break
-
-            if sources:
-                with st.expander("🔍 View Source Documents"):
-                    for s in sources:
-                        st.markdown(f"**📄 {s['source']} (Page {s['page']})**")
-
-                        if s["source"].lower().endswith(".pdf"):
-                            pdf_path = os.path.join(UPLOAD_DIR, s["source"])
-                            st.write(f"DEBUG Active: source={s['source']}, path={pdf_path}, exists={os.path.exists(pdf_path)}")
-                            if os.path.exists(pdf_path):
-                                page_num = int(s["page"])
-                                try:
-                                    annotations = get_pdf_annotations(pdf_path, page_num, s.get("text", ""))
-                                    pdf_viewer(
-                                        input=pdf_path,
-                                        width=700,
-                                        annotations=annotations,
-                                        pages_to_render=[page_num]
-                                    )
-                                except Exception as e:
-                                    st.error(f"Error viewing PDF: {e}")
-                                    st.info(s.get("text", "Text unavailable."))
-                            else:
-                                st.info(s.get("text", "Text unavailable."))
-                        else:
-                            st.info(s.get("text", "Text unavailable."))
-
-        # Save to history
-        st.session_state.chat_history.append({
-            "role": "assistant",
-            "content": full_response,
-            "sources": sources,
-        })
+    nav.run()
