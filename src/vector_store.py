@@ -59,16 +59,59 @@ def get_parent_document_retriever(collection_name: str = ADMIN_COLLECTION) -> Pa
     fs = LocalFileStore(docstore_path)
     store = create_kv_docstore(fs)
 
-    # Try semantic chunking, fall back to recursive character splitting
+    # SemanticChunker is NOT a TextSplitter subclass, so ParentDocumentRetriever
+    # rejects it via Pydantic validation. We wrap it in an adapter that inherits
+    # from TextSplitter to satisfy the type check while keeping semantic splitting.
+    # Additionally, SemanticChunker can produce oversized chunks that exceed the
+    # embedding model's context window — the adapter re-splits those.
     try:
         from langchain_experimental.text_splitter import SemanticChunker
+        from langchain_text_splitters import TextSplitter
+
+        class SemanticChunkerAdapter(TextSplitter):
+            """Adapter wrapping SemanticChunker so it passes TextSplitter type checks.
+            Also caps chunk sizes to avoid exceeding embedding model context limits."""
+
+            def __init__(self, semantic_chunker: SemanticChunker,
+                         max_chunk_size: int = 400, chunk_overlap: int = 100, **kwargs):
+                super().__init__(**kwargs)
+                self._chunker = semantic_chunker
+                self._max_chunk_size = max_chunk_size
+                self._fallback = RecursiveCharacterTextSplitter(
+                    chunk_size=max_chunk_size,
+                    chunk_overlap=chunk_overlap,
+                )
+
+            def split_text(self, text: str) -> list[str]:
+                try:
+                    chunks = self._chunker.split_text(text)
+                except Exception:
+                    # SemanticChunker failed (e.g. sentences too long for
+                    # embedding model context) — fall back to recursive splitting
+                    logger.warning("SemanticChunker failed on a document, "
+                                   "falling back to RecursiveCharacterTextSplitter")
+                    return self._fallback.split_text(text)
+                # Re-split any chunks that exceed the embedding model's context limit
+                safe_chunks = []
+                for chunk in chunks:
+                    if len(chunk) > self._max_chunk_size:
+                        safe_chunks.extend(self._fallback.split_text(chunk))
+                    else:
+                        safe_chunks.append(chunk)
+                return safe_chunks
+
         embedding_model = get_embedding_model()
-        child_splitter = SemanticChunker(
+        _inner = SemanticChunker(
             embeddings=embedding_model,
             breakpoint_threshold_type="percentile",
             breakpoint_threshold_amount=95,
         )
-        logger.info("Using SemanticChunker for collection '%s'", collection_name)
+        child_splitter = SemanticChunkerAdapter(
+            _inner,
+            max_chunk_size=child_chunk_size(),
+            chunk_overlap=child_chunk_overlap(),
+        )
+        logger.info("Using SemanticChunker (adapted) for collection '%s'", collection_name)
     except ImportError:
         child_splitter = RecursiveCharacterTextSplitter(
             chunk_size=child_chunk_size(),
@@ -127,7 +170,21 @@ def add_documents_to_store(docs: list[dict], collection_name: str = ADMIN_COLLEC
             ))
 
     ids = [d.metadata["doc_id"] for d in lc_docs]
-    retriever.add_documents(lc_docs, ids=ids)
+
+    # ChromaDB has a max batch size of 5461. Parent docs get split into many
+    # child chunks, so we batch parent docs in small groups to stay under the limit.
+    BATCH_SIZE = 50
+    for i in range(0, len(lc_docs), BATCH_SIZE):
+        batch_docs = lc_docs[i : i + BATCH_SIZE]
+        batch_ids = ids[i : i + BATCH_SIZE]
+        retriever.add_documents(batch_docs, ids=batch_ids)
+        logger.info(
+            "Added batch %d/%d (%d docs) to collection '%s'",
+            i // BATCH_SIZE + 1,
+            (len(lc_docs) + BATCH_SIZE - 1) // BATCH_SIZE,
+            len(batch_docs),
+            collection_name,
+        )
 
     logger.info("Added %d parent documents to collection '%s'", len(lc_docs), collection_name)
     return len(lc_docs)

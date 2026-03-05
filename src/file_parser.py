@@ -4,6 +4,7 @@ Returns a list of document dicts: { text, source, page/slide }
 """
 
 import os
+import hashlib
 import logging
 from PIL import Image
 import fitz  # PyMuPDF
@@ -26,6 +27,7 @@ except Exception:
     pass
 
 DEFAULT_IMAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "images")
+MIN_IMAGE_SIZE_BYTES = 5 * 1024  # 5 KB — skip tiny images (logos, icons, bullets)
 
 
 def _extract_tables_as_markdown(page) -> str:
@@ -54,6 +56,7 @@ def parse_pdf(file_path: str, images_dir: str = None) -> list[dict]:
 
     docs = []
     filename = os.path.basename(file_path)
+    seen_image_hashes = set()  # Track duplicates across pages
 
     # Try structured markdown extraction with pymupdf4llm
     try:
@@ -99,6 +102,18 @@ def parse_pdf(file_path: str, images_dir: str = None) -> list[dict]:
                 base_image = pdf.extract_image(xref)
                 image_bytes = base_image["image"]
 
+                # Skip tiny images (logos, icons, bullets)
+                if len(image_bytes) < MIN_IMAGE_SIZE_BYTES:
+                    logger.debug("Skipping tiny image (%d bytes) on page %d", len(image_bytes), page_num + 1)
+                    continue
+
+                # Skip duplicate images (same image on multiple pages)
+                img_hash = hashlib.md5(image_bytes).hexdigest()
+                if img_hash in seen_image_hashes:
+                    logger.debug("Skipping duplicate image on page %d", page_num + 1)
+                    continue
+                seen_image_hashes.add(img_hash)
+
                 image_ext = base_image["ext"]
                 image_filename = f"{safe_filename}_page{page_num+1}_img{img_index}.{image_ext}"
                 image_path = os.path.join(images_dir, image_filename)
@@ -141,6 +156,7 @@ def parse_pdf_streaming(file_path: str, images_dir: str = None):
     total_pages = len(pdf)
     os.makedirs(images_dir, exist_ok=True)
     safe_filename = "".join([c if c.isalnum() else "_" for c in filename])
+    seen_image_hashes = set()  # Track duplicates across pages
 
     for page_num in range(total_pages):
         page = pdf[page_num]
@@ -168,6 +184,18 @@ def parse_pdf_streaming(file_path: str, images_dir: str = None):
                 xref = img_info[0]
                 base_image = pdf.extract_image(xref)
                 image_bytes = base_image["image"]
+
+                # Skip tiny images (logos, icons, bullets)
+                if len(image_bytes) < MIN_IMAGE_SIZE_BYTES:
+                    logger.debug("Skipping tiny image (%d bytes) on page %d", len(image_bytes), page_num + 1)
+                    continue
+
+                # Skip duplicate images (same image on multiple pages)
+                img_hash = hashlib.md5(image_bytes).hexdigest()
+                if img_hash in seen_image_hashes:
+                    logger.debug("Skipping duplicate image on page %d", page_num + 1)
+                    continue
+                seen_image_hashes.add(img_hash)
 
                 image_ext = base_image["ext"]
                 image_filename = f"{safe_filename}_page{page_num+1}_img{img_index}.{image_ext}"
@@ -226,6 +254,7 @@ def parse_pptx(file_path: str, images_dir: str = None) -> list[dict]:
 
     # 1. Extract image summaries per slide
     slide_summaries = {}
+    seen_image_hashes = set()  # Track duplicates across slides
     try:
         prs = Presentation(file_path)
 
@@ -238,6 +267,18 @@ def parse_pptx(file_path: str, images_dir: str = None) -> list[dict]:
             for shape in slide.shapes:
                 if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                     image_bytes = shape.image.blob
+
+                    # Skip tiny images (logos, icons, bullets)
+                    if len(image_bytes) < MIN_IMAGE_SIZE_BYTES:
+                        logger.debug("Skipping tiny image (%d bytes) on slide %d", len(image_bytes), i)
+                        continue
+
+                    # Skip duplicate images (same image on multiple slides)
+                    img_hash = hashlib.md5(image_bytes).hexdigest()
+                    if img_hash in seen_image_hashes:
+                        logger.debug("Skipping duplicate image on slide %d", i)
+                        continue
+                    seen_image_hashes.add(img_hash)
 
                     image_ext = shape.image.ext
                     image_filename = f"{safe_filename}_page{i}_img{img_index}.{image_ext}"
